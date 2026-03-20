@@ -1,0 +1,33 @@
+services:
+  postgres-target:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./seed/postgres.sql:/docker-entrypoint-initdb.d/seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  mysql-target:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+      MYSQL_ROOT_PASSWORD: rootpass
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./seed/mysql.sql:/docker-entrypoint-initdb.d/seed.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "testuser", "-ptestpass"]
+      interval: 3s
+      timeout: 3s
+      retries: 15

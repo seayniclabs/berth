@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "berth"
+version = "0.1.0"
+description = "Database access MCP server — inspect, query, and manage databases safely."
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcp[cli]",
+    "asyncpg",
+    "aiosqlite",
+    "aiomysql",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "pip-audit",
+]
+
+[project.scripts]
+berth = "berth.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/berth"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
