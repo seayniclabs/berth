@@ -21,6 +21,8 @@ from berth.server import (
     db_schema,
     db_size,
     health,
+    safety_get_mode,
+    safety_set_mode,
     mgr as server_mgr,
 )
 
@@ -321,3 +323,52 @@ async def test_active_queries_rejects_sqlite(sqlite_conn):
     """db_active_queries should reject non-Postgres connections."""
     result = await db_active_queries(sqlite_conn)
     assert "only supported for PostgreSQL" in result
+
+
+# ── safety_set_mode / safety_get_mode ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_mode_default():
+    """Default mode should be read-only."""
+    result = await safety_get_mode()
+    assert "read-only" in result
+
+
+@pytest.mark.asyncio
+async def test_set_mode_write():
+    """Setting mode to write should return confirmation."""
+    result = await safety_set_mode("write")
+    assert "write" in result
+    check = await safety_get_mode()
+    assert "write" in check
+
+
+@pytest.mark.asyncio
+async def test_set_mode_admin():
+    """Setting mode to admin should return confirmation."""
+    result = await safety_set_mode("admin")
+    assert "admin" in result
+    check = await safety_get_mode()
+    assert "admin" in check
+
+
+@pytest.mark.asyncio
+async def test_set_mode_readonly():
+    """Setting mode to read-only should return confirmation."""
+    safety.set_mode("admin")
+    result = await safety_set_mode("read-only")
+    assert "read-only" in result
+    check = await safety_get_mode()
+    assert "read-only" in check
+
+
+@pytest.mark.asyncio
+async def test_set_mode_invalid():
+    """Invalid mode should return an error, not crash."""
+    result = await safety_set_mode("superuser")
+    assert "ERROR" in result
+    assert "Invalid mode" in result
+    # Mode should remain unchanged (read-only from autouse fixture)
+    check = await safety_get_mode()
+    assert "read-only" in check

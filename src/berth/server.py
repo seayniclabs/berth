@@ -117,6 +117,26 @@ def _validate_backup_path(path: str) -> tuple[bool, str]:
 
 
 @mcp.tool()
+async def safety_set_mode(mode: str) -> str:
+    """Switch the safety mode.
+
+    Accepts: "read-only", "write", or "admin".
+    Returns the current mode after setting.
+    """
+    try:
+        new_mode = set_mode(mode)
+    except ValueError:
+        return f"ERROR: Invalid mode '{mode}'. Valid modes: read-only, write, admin"
+    return f"Mode set to: {new_mode.value}"
+
+
+@mcp.tool()
+async def safety_get_mode() -> str:
+    """Return the current safety mode without changing it."""
+    return f"Current mode: {get_mode().value}"
+
+
+@mcp.tool()
 async def health() -> str:
     """Server health check. Returns version and status."""
     return f"berth v{__version__} | status: ok | mode: {get_mode().value}"
