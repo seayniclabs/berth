@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "berth"
+name = "berth-mcp"
 version = "0.1.0"
 description = "Database access MCP server — inspect, query, and manage databases safely."
 readme = "README.md"

@@ -54,19 +54,19 @@ The server starts in **read-only mode**. Write and admin modes must be explicitl
 From PyPI:
 
 ```bash
-pip install berth
+pip install berth-mcp
 ```
 
 Or in an isolated environment:
 
 ```bash
-pipx install berth
+pipx install berth-mcp
 ```
 
 MySQL support requires an optional dependency:
 
 ```bash
-pip install berth[mysql]
+pip install berth-mcp[mysql]
 ```
 
 PostgreSQL (`asyncpg`) and SQLite (`aiosqlite`) drivers are included by default.
