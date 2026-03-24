@@ -4,6 +4,7 @@ Provides 12 tools for inspecting, querying, and managing databases
 through the Model Context Protocol.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -58,6 +59,56 @@ def _format_table(rows: list[dict]) -> str:
     for sr in str_rows:
         lines.append(" | ".join(sr[c].ljust(widths[c]) for c in cols))
     return "\n".join(lines)
+
+
+async def _validate_table_name(connection_id: str, table: str) -> tuple[bool, str]:
+    """Validate that a table name exists in sqlite_master.
+
+    Prevents SQL injection through table names used in PRAGMA statements.
+    Returns (valid, error_message).
+    """
+    conn = mgr.get(connection_id)
+    if conn.db_type != DBType.SQLITE:
+        # For non-SQLite, table names are passed as parameters — no injection risk
+        return True, ""
+
+    # Check that the name exists as a real table/view in sqlite_master
+    rows = await mgr.fetch(
+        connection_id,
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+        (table,),
+    )
+    if not rows:
+        return False, f"Table '{table}' does not exist."
+    return True, ""
+
+
+def _validate_backup_path(path: str) -> tuple[bool, str]:
+    """Validate a backup/restore path against traversal attacks.
+
+    Rules:
+    - No '..' components
+    - Must resolve inside BERTH_BACKUP_DIR (default: cwd)
+    - No null bytes
+
+    Returns (valid, error_message).
+    """
+    if "\x00" in path:
+        return False, "Path contains null bytes."
+
+    backup_dir = os.environ.get("BERTH_BACKUP_DIR", os.getcwd())
+    backup_dir = os.path.realpath(backup_dir)
+
+    # Resolve the target path relative to backup_dir
+    if os.path.isabs(path):
+        resolved = os.path.realpath(path)
+    else:
+        resolved = os.path.realpath(os.path.join(backup_dir, path))
+
+    if not resolved.startswith(backup_dir + os.sep) and resolved != backup_dir:
+        return False, f"Path escapes the backup directory ({backup_dir})."
+
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +272,9 @@ async def db_describe(connection_id: str, table: str) -> str:
         )
 
     elif conn.db_type == DBType.SQLITE:
+        valid, err = await _validate_table_name(connection_id, table)
+        if not valid:
+            return f"BLOCKED: {err}"
         raw = await mgr.fetch(connection_id, f"PRAGMA table_info('{table}')")
         rows = [
             {
@@ -276,6 +330,9 @@ async def db_relationships(
     elif conn.db_type == DBType.SQLITE:
         # SQLite: need to query each table individually
         if table:
+            valid, err = await _validate_table_name(connection_id, table)
+            if not valid:
+                return f"BLOCKED: {err}"
             tables_to_check = [table]
         else:
             t_rows = await mgr.fetch(
@@ -285,6 +342,7 @@ async def db_relationships(
             tables_to_check = [r["name"] for r in t_rows]
 
         for tbl in tables_to_check:
+            # tables_to_check entries come from sqlite_master — already validated
             fks = await mgr.fetch(connection_id, f"PRAGMA foreign_key_list('{tbl}')")
             for fk in fks:
                 rows.append(
@@ -391,6 +449,11 @@ async def db_active_queries(connection_id: str) -> str:
 @mcp.tool()
 async def db_explain(connection_id: str, sql: str) -> str:
     """Run EXPLAIN ANALYZE on a query and return the plan."""
+    # Validate the inner SQL before prepending EXPLAIN — prevents injection
+    allowed, reason = check_write_allowed(sql)
+    if not allowed:
+        return f"BLOCKED: {reason}"
+
     conn = mgr.get(connection_id)
 
     if conn.db_type == DBType.POSTGRES:
@@ -421,7 +484,13 @@ async def db_backup(connection_id: str, output_path: str) -> str:
     - PostgreSQL: uses pg_dump
     - MySQL: uses mysqldump
     - SQLite: uses .backup via sqlite3 CLI
+
+    Paths are sandboxed to BERTH_BACKUP_DIR (default: cwd).
     """
+    valid, err = _validate_backup_path(output_path)
+    if not valid:
+        return f"BLOCKED: {err}"
+
     conn = mgr.get(connection_id)
 
     if conn.db_type == DBType.POSTGRES:
@@ -490,7 +559,12 @@ async def db_restore(
     """Restore a database from a backup file.
 
     Requires admin mode and a confirmation token (destructive operation).
+    Paths are sandboxed to BERTH_BACKUP_DIR (default: cwd).
     """
+    valid, err = _validate_backup_path(input_path)
+    if not valid:
+        return f"BLOCKED: {err}"
+
     if get_mode() != Mode.ADMIN:
         return "BLOCKED: db_restore requires admin mode. Use set_mode('admin') first."
 

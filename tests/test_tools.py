@@ -1,16 +1,26 @@
 """Integration tests for Berth MCP tools — requires database fixtures."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from berth import safety
 from berth.connections import ConnectionManager
 from berth.server import (
     _ensure_limit,
+    _validate_backup_path,
+    db_active_queries,
+    db_backup,
     db_describe,
     db_execute,
+    db_explain,
     db_query,
     db_relationships,
+    db_restore,
     db_schema,
+    db_size,
+    health,
     mgr as server_mgr,
 )
 
@@ -176,3 +186,138 @@ async def test_write_injection_blocked_readonly(sqlite_conn):
         "INSERT INTO users (name, email) VALUES ('x', 'x@test.local'); DROP TABLE users; --",
     )
     assert "BLOCKED" in result
+
+
+# ── Health tool ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_health_returns_version_and_status():
+    result = await health()
+    assert "berth v" in result
+    assert "status: ok" in result
+    assert "mode:" in result
+
+
+# ── db_size ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_db_size_sqlite(sqlite_conn):
+    result = await db_size(sqlite_conn)
+    assert "Database size:" in result
+    assert "bytes" in result
+
+
+# ── db_explain security ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_explain_select_allowed(sqlite_conn):
+    """EXPLAIN of a SELECT should succeed."""
+    result = await db_explain(sqlite_conn, "SELECT * FROM users")
+    # SQLite EXPLAIN QUERY PLAN returns row dicts — any non-error output is fine
+    assert "BLOCKED" not in result
+
+
+@pytest.mark.asyncio
+async def test_explain_drop_blocked(sqlite_conn):
+    """EXPLAIN of a DROP should be blocked by safety check."""
+    result = await db_explain(sqlite_conn, "DROP TABLE users")
+    assert "BLOCKED" in result
+
+
+@pytest.mark.asyncio
+async def test_explain_insert_blocked_readonly(sqlite_conn):
+    """EXPLAIN of an INSERT should be blocked in read-only mode."""
+    result = await db_explain(sqlite_conn, "INSERT INTO users (name, email) VALUES ('x', 'x@test.local')")
+    assert "BLOCKED" in result
+
+
+# ── db_backup / db_restore path validation ────────────────────────────
+
+
+class TestBackupPathValidation:
+    def test_relative_path_in_sandbox(self):
+        valid, _ = _validate_backup_path("backup.sql")
+        assert valid
+
+    def test_dotdot_rejected(self):
+        valid, err = _validate_backup_path("../../../etc/passwd")
+        assert not valid
+        assert "escapes" in err
+
+    def test_absolute_outside_sandbox_rejected(self):
+        valid, err = _validate_backup_path("/etc/passwd")
+        assert not valid
+        assert "escapes" in err
+
+    def test_null_byte_rejected(self):
+        valid, err = _validate_backup_path("backup\x00.sql")
+        assert not valid
+        assert "null" in err.lower()
+
+    def test_absolute_inside_sandbox_allowed(self, tmp_path):
+        target = str(tmp_path / "backup.sql")
+        with patch.dict(os.environ, {"BERTH_BACKUP_DIR": str(tmp_path)}):
+            valid, _ = _validate_backup_path(target)
+            assert valid
+
+    def test_traversal_with_symlink_components(self):
+        """Dotdot traversal even with extra path components should be blocked."""
+        valid, err = _validate_backup_path("subdir/../../etc/shadow")
+        assert not valid
+        assert "escapes" in err
+
+
+@pytest.mark.asyncio
+async def test_db_backup_path_traversal_blocked(sqlite_conn):
+    """db_backup should reject path traversal attempts."""
+    result = await db_backup(sqlite_conn, "../../../etc/evil.sql")
+    assert "BLOCKED" in result
+
+
+@pytest.mark.asyncio
+async def test_db_restore_path_traversal_blocked(sqlite_conn):
+    """db_restore should reject path traversal attempts."""
+    safety.set_mode("admin")
+    result = await db_restore(sqlite_conn, "../../../etc/evil.sql")
+    assert "BLOCKED" in result
+
+
+# ── SQLite PRAGMA injection ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_describe_adversarial_table_name(sqlite_conn):
+    """Adversarial table name should be rejected, not interpolated into PRAGMA."""
+    result = await db_describe(sqlite_conn, "'); DROP TABLE users; --")
+    assert "BLOCKED" in result
+    # Verify users table still exists
+    check = await db_query(sqlite_conn, "SELECT COUNT(*) AS cnt FROM users")
+    assert "10" in check
+
+
+@pytest.mark.asyncio
+async def test_relationships_adversarial_table_name(sqlite_conn):
+    """Adversarial table name should be rejected in db_relationships."""
+    result = await db_relationships(sqlite_conn, "'); DROP TABLE users; --")
+    assert "BLOCKED" in result
+
+
+@pytest.mark.asyncio
+async def test_describe_nonexistent_table(sqlite_conn):
+    """Non-existent table should return a clear error."""
+    result = await db_describe(sqlite_conn, "nonexistent_table")
+    assert "BLOCKED" in result
+    assert "does not exist" in result
+
+
+# ── db_active_queries ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_active_queries_rejects_sqlite(sqlite_conn):
+    """db_active_queries should reject non-Postgres connections."""
+    result = await db_active_queries(sqlite_conn)
+    assert "only supported for PostgreSQL" in result

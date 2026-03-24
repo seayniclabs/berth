@@ -25,7 +25,7 @@ class Connection:
     conn_id: str
     db_type: DBType
     dsn: str
-    pool: Any = None  # asyncpg.Pool | aiosqlite.Connection | aiomysql.Pool
+    pool: Any = None  # asyncpg.Pool | aiosqlite.Connection | asyncmy.Pool
     _display_dsn: str = field(default="", repr=False)
 
     @property
@@ -110,11 +110,11 @@ class ConnectionManager:
             return conn
 
         if db_type == DBType.MYSQL:
-            import aiomysql
+            import asyncmy
             from urllib.parse import urlparse
 
             parsed = urlparse(dsn)
-            return await aiomysql.create_pool(
+            return await asyncmy.create_pool(
                 host=parsed.hostname or "localhost",
                 port=parsed.port or 3306,
                 user=parsed.username or "root",
@@ -153,7 +153,8 @@ class ConnectionManager:
 
         if conn.db_type == DBType.MYSQL:
             async with conn.pool.acquire() as raw_conn:
-                async with raw_conn.cursor(aiomysql.DictCursor) as cur:
+                from asyncmy.cursors import DictCursor
+                async with raw_conn.cursor(DictCursor) as cur:
                     await cur.execute(sql, params or ())
                     return [dict(r) for r in await cur.fetchall()]
 
@@ -178,8 +179,6 @@ class ConnectionManager:
             return cursor.rowcount
 
         if conn.db_type == DBType.MYSQL:
-            import aiomysql
-
             async with conn.pool.acquire() as raw_conn:
                 async with raw_conn.cursor() as cur:
                     await cur.execute(sql, params or ())
