@@ -4,7 +4,7 @@
 
 A secure berth for your data -- database access for AI tools.
 
-Berth is a [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI assistants safe, structured access to PostgreSQL, SQLite, and MySQL databases. It exposes 12 tools for inspecting schemas, running queries, managing data, and performing backups -- all governed by a 3-tier safety model that prevents accidental damage.
+Berth is a [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI assistants safe, structured access to PostgreSQL, SQLite, and MySQL databases. It exposes 13 tools for inspecting schemas, running queries, managing data, generating migrations, and performing backups -- all governed by a 3-tier safety model that prevents accidental damage.
 
 ---
 
@@ -36,8 +36,38 @@ The server starts in **read-only mode**. Write and admin modes must be explicitl
 | `db_size` | Database and table sizes | `connection_id` |
 | `db_active_queries` | Currently running queries (PostgreSQL only) | `connection_id` |
 | `db_explain` | Run EXPLAIN ANALYZE on a query | `connection_id`, `sql` |
+| `generate_migration` | Generate migration SQL by comparing schemas | `connection_id` + `target_sql`, or `from_connection` + `to_connection` |
 | `db_backup` | Create a database backup | `connection_id`, `output_path` |
 | `db_restore` | Restore from backup (admin mode + confirmation token) | `connection_id`, `input_path`, `confirmation_token` |
+
+---
+
+## Schema Migrations
+
+The `generate_migration` tool compares two schemas and produces dialect-aware SQL to migrate from one to the other. Two modes of operation:
+
+**Mode 1 — Live database vs. target DDL:**
+
+Provide `connection_id` (an active connection) and `target_sql` (CREATE TABLE statements describing the desired schema). Berth introspects the live database and diffs it against the parsed target.
+
+**Mode 2 — Two live databases:**
+
+Provide `from_connection` and `to_connection` (two active connection IDs). Berth introspects both and generates the migration to transform the source into the target.
+
+**What it generates:**
+
+- `CREATE TABLE` for new tables
+- `ALTER TABLE ADD COLUMN` for new columns
+- `ALTER TABLE ALTER COLUMN` / `MODIFY COLUMN` for type, nullability, and default changes
+- `CREATE INDEX` / `DROP INDEX` for index changes
+- `ADD CONSTRAINT` / `DROP CONSTRAINT` for foreign key changes
+- `DROP TABLE` and `DROP COLUMN` are commented out with warnings (safety first)
+
+**Dialect handling:**
+
+- **PostgreSQL** -- uses `ALTER COLUMN ... TYPE`, `SET/DROP NOT NULL`, `SET/DROP DEFAULT`
+- **MySQL** -- uses `MODIFY COLUMN` for all column changes, `DROP INDEX ... ON table`
+- **SQLite** -- warns about unsupported operations and includes the table rebuild pattern for changes that require it (ALTER COLUMN, DROP COLUMN on older versions, constraint changes)
 
 ---
 

@@ -13,6 +13,13 @@ from mcp.server.fastmcp import FastMCP
 
 from berth import __version__
 from berth.connections import ConnectionManager, DBType
+from berth.migration import (
+    Dialect,
+    diff_schemas,
+    generate_migration_sql,
+    introspect_schema,
+    parse_create_statements,
+)
 from berth.safety import (
     Mode,
     check_write_allowed,
@@ -653,6 +660,73 @@ async def db_restore(
         return f"Restored from {input_path}"
 
     return "Unsupported database type for restore."
+
+
+@mcp.tool()
+async def generate_migration(
+    connection_id: str | None = None,
+    target_sql: str | None = None,
+    from_connection: str | None = None,
+    to_connection: str | None = None,
+) -> str:
+    """Generate migration SQL by comparing two schemas.
+
+    Two modes of operation:
+
+    Mode 1 — Compare live database against target DDL:
+      - connection_id: source database connection
+      - target_sql: CREATE TABLE statements describing the desired schema
+
+    Mode 2 — Compare two live databases:
+      - from_connection: source database connection_id
+      - to_connection: target database connection_id
+
+    Returns dialect-aware ALTER statements to migrate source -> target.
+    Destructive operations (DROP TABLE, DROP COLUMN) are commented out for safety.
+    """
+    # Validate input combinations
+    mode1 = connection_id is not None and target_sql is not None
+    mode2 = from_connection is not None and to_connection is not None
+
+    if not mode1 and not mode2:
+        return (
+            "ERROR: Provide either (connection_id + target_sql) or "
+            "(from_connection + to_connection)."
+        )
+    if mode1 and mode2:
+        return (
+            "ERROR: Use one mode — either (connection_id + target_sql) or "
+            "(from_connection + to_connection), not both."
+        )
+
+    try:
+        if mode1:
+            # Mode 1: live source vs. parsed target SQL
+            conn = mgr.get(connection_id)
+            dialect = Dialect(conn.db_type.value)
+            source_schema = await introspect_schema(
+                mgr, connection_id, conn.db_type.value
+            )
+            target_schema = parse_create_statements(target_sql)
+        else:
+            # Mode 2: two live databases
+            from_conn = mgr.get(from_connection)
+            to_conn = mgr.get(to_connection)
+            dialect = Dialect(from_conn.db_type.value)
+            source_schema = await introspect_schema(
+                mgr, from_connection, from_conn.db_type.value
+            )
+            target_schema = await introspect_schema(
+                mgr, to_connection, to_conn.db_type.value
+            )
+
+        diff = diff_schemas(source_schema, target_schema)
+        return generate_migration_sql(diff, dialect)
+
+    except KeyError as exc:
+        return f"ERROR: {exc}"
+    except Exception as exc:
+        return f"ERROR: {exc}"
 
 
 # ---------------------------------------------------------------------------
