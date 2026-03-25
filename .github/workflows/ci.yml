@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U testuser -d testdb"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpass
+          MYSQL_ROOT_PASSWORD: rootpass
+        ports:
+          - 13306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u testuser -ptestpass"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Seed databases
+        run: |
+          PGPASSWORD=testpass psql -h localhost -p 15432 -U testuser -d testdb -f tests/seed/postgres.sql
+          mysql -h 127.0.0.1 -P 13306 -u testuser -ptestpass testdb < tests/seed/mysql.sql
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test,mysql]"
+          pip install pip-audit
+
+      - name: Run tests
+        run: pytest -v --cov=berth --cov-report=xml --cov-fail-under=50
+        env:
+          BERTH_SKIP_DOCKER: "1"
+
+      - name: Security audit
+        run: pip-audit
+
+      - name: Leakage scan
+        run: |
+          ! grep -ri "charlieseay\|seaynicroute\|192\.168\.0" src/ || (echo "LEAK DETECTED" && exit 1)
