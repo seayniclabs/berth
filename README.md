@@ -190,3 +190,5 @@ docker compose -f tests/docker-compose.test.yml down
 ## License
 
 [MIT](LICENSE)
+
+<!-- mcp-name: io.github.seayniclabs/berth -->
